@@ -14,3 +14,6 @@ venv/
 # IDE
 .idea/
 workspace.xml
+
+# Development
+CLAUDE.md
