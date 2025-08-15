@@ -6,7 +6,7 @@ using InteractiveUtils
 
 # ╔═╡ 12e84154-4ce3-42db-8ff8-1a9eebdeb42d
 begin
-	using CSV, DataFrames, JuMP, HiGHS, PlutoUI
+	using CSV, DataFrames, JuMP, HiGHS, PlutoUI, PrettyTables
 	md"# FPL Optimiser ⚽"
 end
 
@@ -16,11 +16,78 @@ begin
 	sort(df, "1_Pts", rev=true)
 end
 
-# ╔═╡ fcb74fe1-a8ca-4f99-bcb8-fe3b703ef81f
-md"Loaded $(nrow(df)) players from $(length(unique(df.Team))) teams"
+# ╔═╡ d1e2f3a4-5b6c-7d8e-9f0a-123456789abc
+function display_squad(results_df, captain_name, bench_names, total_cost, expected_points)
+
+    captain_highlighter = Highlighter(
+        (data, i, j) -> i > 1 && string(data[i, 1]) == captain_name,
+        background = :green,
+        bold = true
+    )
+
+    bench_highlighter = Highlighter(
+        (data, i, j) -> i > 1 && string(data[i, 1]) in bench_names,
+        background = :blue
+    )
+
+    pretty_table(results_df; highlighters = (captain_highlighter, bench_highlighter), 
+                 title = "===== FPL Squad =====")
+
+	println("Squad Value: $(round(total_cost, digits=3))")
+	println("Expected Points: $(round(expected_points, digits=3))")
+    
+end
+
+# ╔═╡ e2f3a4b5-6c7d-8e9f-0a1b-234567890def
+function process_squad_data(squad_indices, df, starter, captain, total_cost, expected_points)
+
+    results = DataFrame(
+        Name = String[],
+        Pos = String[],
+        Team = String[],
+        Price = Float64[],
+        xPts = Float64[]
+    )
+    
+    pos_priority = Dict("G" => 1, "D" => 2, "M" => 3, "F" => 4)
+    starters = []
+    bench_players = []
+    
+    for i in squad_indices
+        player_data = (df[i, "Name"], df[i, "Pos"], df[i, "Team"], df[i, "BV"], df[i, "1_Pts"])
+        if value(starter[i]) > 0.5
+            push!(starters, player_data)
+        else
+            push!(bench_players, player_data)
+        end
+    end
+    
+    sort!(starters, by = x -> (pos_priority[x[2]], -x[5]))
+    sort!(bench_players, by = x -> (pos_priority[x[2]], -x[5]))
+    
+    for player in starters
+        push!(results, player)
+    end
+    for player in bench_players
+        push!(results, player)
+    end
+    
+    captain_name = ""
+    bench_names = Set{String}()
+    
+    for i in squad_indices
+        if value(captain[i]) > 0.5
+            captain_name = df[i, "Name"]
+        elseif value(starter[i]) < 0.5  
+            push!(bench_names, df[i, "Name"])
+        end
+    end
+    
+    return results, captain_name, bench_names, total_cost, expected_points
+end
 
 # ╔═╡ 072e91ef-b912-47f4-90e9-a55f33a00f2b
-function optimise(df)
+function optimise_basic(df)
 	model = Model(HiGHS.Optimizer)
 
 	n = nrow(df)
@@ -65,20 +132,22 @@ function optimise(df)
 	
 	optimize!(model)
 
-	println("\n===== OPTIMAL TEAM =====")
-    for i in 1:n
-        if value(squad[i]) == 1 
-            role = value(captain[i]) > 0.5 ? " 👑" : 
-                   value(starter[i]) > 0.5 ? " 🟢" : " 🪑"
-            println("$(df[i, "Name"])$role - £$(df[i, "BV"])m - $(df[i, "1_Pts"]) pts")
-        end
-    end
-	
-	return model
+	total_cost = sum(df[i, "BV"] * value(squad[i]) for i in 1:n)
+	expected_points = sum(df[i, "1_Pts"] * (value(starter[i]) + value(captain[i])) for i in 1:n)
+
+    squad_indices = findall(i -> value(squad[i]) > 0.5, 1:n)
+    
+    return process_squad_data(squad_indices, df, starter, captain, total_cost, expected_points)
 end
 
 # ╔═╡ 24596058-0dd5-45d3-8eae-50ce1d674bc5
-optimise(df)
+begin
+	team, captain_name, bench_names, total_cost, expected_points = optimise_basic(df)
+	display_squad(team, captain_name, bench_names, total_cost, expected_points)
+end
+
+# ╔═╡ a1b2c3d4-5e6f-7890-abcd-123456789012
+display_squad(team, captain_name, bench_names, total_cost, expected_points)
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -88,6 +157,7 @@ DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 HiGHS = "87dc4568-4c63-4d18-b0c0-bb2238e4078b"
 JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
+PrettyTables = "08abe8d2-0d0c-5749-adfa-8a2ac140af0d"
 
 [compat]
 CSV = "~0.10.15"
@@ -95,6 +165,7 @@ DataFrames = "~1.7.0"
 HiGHS = "~1.19.0"
 JuMP = "~1.28.0"
 PlutoUI = "~0.7.69"
+PrettyTables = "~2.4.0"
 """
 
 # ╔═╡ 00000000-0000-0000-0000-000000000002
@@ -103,7 +174,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.6"
 manifest_format = "2.0"
-project_hash = "4f3d42e5af013335a84d012de6d55420254787fa"
+project_hash = "0413e197e769cdc8a34dfd925f196155a1276776"
 
 [[deps.AbstractPlutoDingetjes]]
 deps = ["Pkg"]
@@ -740,8 +811,10 @@ version = "17.4.0+2"
 # ╔═╡ Cell order:
 # ╠═12e84154-4ce3-42db-8ff8-1a9eebdeb42d
 # ╠═4e91c566-5db0-4386-a587-8932ac0eacb6
-# ╠═fcb74fe1-a8ca-4f99-bcb8-fe3b703ef81f
 # ╠═072e91ef-b912-47f4-90e9-a55f33a00f2b
 # ╠═24596058-0dd5-45d3-8eae-50ce1d674bc5
+# ╠═a1b2c3d4-5e6f-7890-abcd-123456789012
+# ╠═d1e2f3a4-5b6c-7d8e-9f0a-123456789abc
+# ╠═e2f3a4b5-6c7d-8e9f-0a1b-234567890def
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
