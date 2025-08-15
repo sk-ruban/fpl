@@ -22,6 +22,14 @@ main {
 }
 """
 
+# ╔═╡ 903640fd-6d76-4a1b-b648-c04d90437f85
+# Constants
+begin
+	const BENCH_WEIGHT = 0.1
+	const GAMEWEEK_WEIGHTS = [1.0, 0.9, 0.8, 0.7, 0.6]
+	const BUDGET = 100.0
+end;
+
 # ╔═╡ 4e91c566-5db0-4386-a587-8932ac0eacb6
 begin
 	df = CSV.read("../data/projection.csv", DataFrame)
@@ -47,7 +55,7 @@ function display_squad(results_df, captain_name, bench_names)
 end
 
 # ╔═╡ a553d54e-7719-417e-9d34-a3e2f9075e42
-function process_squad_data(squad_indices, df, starter, captain)
+function process_squad_data(squad_idx, starter_idx, captain_idx, df)
 
     results = DataFrame(
         Name = String[],
@@ -58,17 +66,11 @@ function process_squad_data(squad_indices, df, starter, captain)
     )
     
     pos_priority = Dict("G" => 1, "D" => 2, "M" => 3, "F" => 4)
-    starters = []
-    bench_players = []
-    
-    for i in squad_indices
-        player_data = (df[i, "Name"], df[i, "Pos"], df[i, "Team"], df[i, "BV"], df[i, "1_Pts"])
-        if value(starter[i]) > 0.5
-            push!(starters, player_data)
-        else
-            push!(bench_players, player_data)
-        end
-    end
+
+	starters = [(df[i, "Name"], df[i, "Pos"], df[i, "Team"], df[i, "BV"], df[i, "1_Pts"]) for i in starter_idx]
+
+    bench_idx = setdiff(squad_idx, starter_idx)
+    bench_players = [(df[i, "Name"], df[i, "Pos"], df[i, "Team"], df[i, "BV"], df[i, "1_Pts"]) for i in bench_idx]
     
     sort!(starters, by = x -> (pos_priority[x[2]], -x[5]))
     sort!(bench_players, by = x -> (pos_priority[x[2]], -x[5]))
@@ -80,16 +82,8 @@ function process_squad_data(squad_indices, df, starter, captain)
         push!(results, player)
     end
     
-    captain_name = ""
-    bench_names = Set{String}()
-    
-    for i in squad_indices
-        if value(captain[i]) > 0.5
-            captain_name = df[i, "Name"]
-        elseif value(starter[i]) < 0.5  
-            push!(bench_names, df[i, "Name"])
-        end
-    end
+    captain_name = df[captain_idx, "Name"]
+    bench_names = Set([df[i, "Name"] for i in bench_idx])
     
     return results, captain_name, bench_names
 end
@@ -104,10 +98,10 @@ function optimise_basic(df)
 	@variable(model, starter[1:n], Bin)
 	@variable(model, captain[1:n], Bin)
 
-	@objective(model, Max, sum(df[i, "1_Pts"] * (starter[i] + captain[i]) for i in 1:n))
+	@objective(model, Max, sum(df[i, "1_Pts"] * (starter[i] + captain[i] + BENCH_WEIGHT * (squad[i] - starter[i])) for i in 1:n))
 
 	# Budget
-	@constraint(model, sum(df[i, "BV"] * squad[i] for i in 1:n) <= 100.0)
+	@constraint(model, sum(df[i, "BV"] * squad[i] for i in 1:n) <= BUDGET)
 
 	# Squad composition
 	@constraint(model, sum(squad) == 15)
@@ -140,9 +134,11 @@ function optimise_basic(df)
 	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "F") <= 3)
 	
 	optimize!(model)
-    squad_indices = findall(i -> value(squad[i]) > 0.5, 1:n)
+    squad_idx = findall(i -> value(squad[i]) > 0.5, 1:n)
+    starter_idx = findall(i -> value(starter[i]) > 0.5, 1:n)
+    captain_idx = findfirst(i -> value(captain[i]) > 0.5, 1:n)
     
-    return process_squad_data(squad_indices, df, starter, captain)
+    return process_squad_data(squad_idx, starter_idx, captain_idx, df)
 end
 
 # ╔═╡ 24596058-0dd5-45d3-8eae-50ce1d674bc5
@@ -153,22 +149,21 @@ team, captain_name, bench_names = optimise_basic(df);
 display_squad(team, captain_name, bench_names)
 
 # ╔═╡ a8a47da5-ebe9-49c2-ad03-1eda45c0c9c3
-function optimise_multigw(df)
+function optimise_multiple_gw(df)
 	model = Model(HiGHS.Optimizer)
 
 	n = nrow(df)
-	weights=[1.0, 0.9, 0.8, 0.7, 0.6]
 
 	@variable(model, squad[1:n], Bin)
 	@variable(model, starter[1:n], Bin)
 	@variable(model, captain[1:n], Bin)
 
     @objective(model, Max, 
-        sum(weights[gw] * df[i, "$(gw)_Pts"] * (starter[i] + captain[i]) 
+        sum(GAMEWEEK_WEIGHTS[gw] * df[i, "$(gw)_Pts"] * (starter[i] + captain[i] + BENCH_WEIGHT * (squad[i] - starter[i])) 
             for i in 1:n, gw in 1:5))
 
 	# Budget
-	@constraint(model, sum(df[i, "BV"] * squad[i] for i in 1:n) <= 100.0)
+	@constraint(model, sum(df[i, "BV"] * squad[i] for i in 1:n) <= BUDGET)
 
 	# Squad composition
 	@constraint(model, sum(squad) == 15)
@@ -201,14 +196,16 @@ function optimise_multigw(df)
 	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "F") <= 3)
 	
 	optimize!(model)
-    squad_indices = findall(i -> value(squad[i]) > 0.5, 1:n)
+    squad_idx = findall(i -> value(squad[i]) > 0.5, 1:n)
+    starter_idx = findall(i -> value(starter[i]) > 0.5, 1:n)
+    captain_idx = findfirst(i -> value(captain[i]) > 0.5, 1:n)
     
-    return process_squad_data(squad_indices, df, starter, captain)
+    return process_squad_data(squad_idx, starter_idx, captain_idx, df)
 end
 
 # ╔═╡ 70c6b543-2c1e-4584-aa89-8192415adea9
 # ╠═╡ show_logs = false
-team1, captain_name1, bench_names1 = optimise_multigw(df);
+team1, captain_name1, bench_names1 = optimise_multiple_gw(df);
 
 # ╔═╡ 706c3003-7bdd-49b6-a358-ccd079cdb5f0
 display_squad(team1, captain_name1, bench_names1)
@@ -875,6 +872,7 @@ version = "17.4.0+2"
 # ╔═╡ Cell order:
 # ╠═15da7d9d-aacd-43c0-ab71-5f37fadd84e8
 # ╠═c49d25ca-2221-48b2-b976-8a77b47acc9d
+# ╠═903640fd-6d76-4a1b-b648-c04d90437f85
 # ╠═12e84154-4ce3-42db-8ff8-1a9eebdeb42d
 # ╠═4e91c566-5db0-4386-a587-8932ac0eacb6
 # ╠═072e91ef-b912-47f4-90e9-a55f33a00f2b
