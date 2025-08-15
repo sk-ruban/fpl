@@ -7,8 +7,20 @@ using InteractiveUtils
 # ╔═╡ 12e84154-4ce3-42db-8ff8-1a9eebdeb42d
 begin
 	using CSV, DataFrames, JuMP, HiGHS, PlutoUI, PrettyTables
-	md"# FPL Optimiser ⚽"
 end
+
+# ╔═╡ 15da7d9d-aacd-43c0-ab71-5f37fadd84e8
+md"# FPL Optimiser ⚽"
+
+# ╔═╡ c49d25ca-2221-48b2-b976-8a77b47acc9d
+# Pluto.jl width settings
+html"""<style>
+main {
+	max-width: 80%;
+	margin-left: 1%;
+	margin-right: 10% !important;
+}
+"""
 
 # ╔═╡ 4e91c566-5db0-4386-a587-8932ac0eacb6
 begin
@@ -17,7 +29,7 @@ begin
 end
 
 # ╔═╡ d1e2f3a4-5b6c-7d8e-9f0a-123456789abc
-function display_squad(results_df, captain_name, bench_names, total_cost, expected_points)
+function display_squad(results_df, captain_name, bench_names)
 
     captain_highlighter = Highlighter(
         (data, i, j) -> i > 1 && string(data[i, 1]) == captain_name,
@@ -31,15 +43,11 @@ function display_squad(results_df, captain_name, bench_names, total_cost, expect
     )
 
     pretty_table(results_df; highlighters = (captain_highlighter, bench_highlighter), 
-                 title = "===== FPL Squad =====")
-
-	println("Squad Value: $(round(total_cost, digits=3))")
-	println("Expected Points: $(round(expected_points, digits=3))")
-    
+                 title = "===== FPL Squad =====") 
 end
 
-# ╔═╡ e2f3a4b5-6c7d-8e9f-0a1b-234567890def
-function process_squad_data(squad_indices, df, starter, captain, total_cost, expected_points)
+# ╔═╡ a553d54e-7719-417e-9d34-a3e2f9075e42
+function process_squad_data(squad_indices, df, starter, captain)
 
     results = DataFrame(
         Name = String[],
@@ -83,7 +91,7 @@ function process_squad_data(squad_indices, df, starter, captain, total_cost, exp
         end
     end
     
-    return results, captain_name, bench_names, total_cost, expected_points
+    return results, captain_name, bench_names
 end
 
 # ╔═╡ 072e91ef-b912-47f4-90e9-a55f33a00f2b
@@ -113,6 +121,7 @@ function optimise_basic(df)
 	# Team limits
 	for team in unique(df.Team)
 		@constraint(model, sum(squad[i] for i in 1:n if df[i, "Team"] == team) <= 3)
+		@constraint(model, sum(squad[i] for i in 1:n if df[i, "Team"] == team && (df[i, "Pos"] == "G" || df[i, "Pos"] == "D")) <= 2)
 	end
 
 	# Hierarchy
@@ -131,23 +140,78 @@ function optimise_basic(df)
 	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "F") <= 3)
 	
 	optimize!(model)
-
-	total_cost = sum(df[i, "BV"] * value(squad[i]) for i in 1:n)
-	expected_points = sum(df[i, "1_Pts"] * (value(starter[i]) + value(captain[i])) for i in 1:n)
-
     squad_indices = findall(i -> value(squad[i]) > 0.5, 1:n)
     
-    return process_squad_data(squad_indices, df, starter, captain, total_cost, expected_points)
+    return process_squad_data(squad_indices, df, starter, captain)
 end
 
 # ╔═╡ 24596058-0dd5-45d3-8eae-50ce1d674bc5
-begin
-	team, captain_name, bench_names, total_cost, expected_points = optimise_basic(df)
-	display_squad(team, captain_name, bench_names, total_cost, expected_points)
+# ╠═╡ show_logs = false
+team, captain_name, bench_names = optimise_basic(df); 
+
+# ╔═╡ b772bbf9-6659-4b6e-a808-798ba392399f
+display_squad(team, captain_name, bench_names)
+
+# ╔═╡ a8a47da5-ebe9-49c2-ad03-1eda45c0c9c3
+function optimise_multigw(df)
+	model = Model(HiGHS.Optimizer)
+
+	n = nrow(df)
+	weights=[1.0, 0.9, 0.8, 0.7, 0.6]
+
+	@variable(model, squad[1:n], Bin)
+	@variable(model, starter[1:n], Bin)
+	@variable(model, captain[1:n], Bin)
+
+    @objective(model, Max, 
+        sum(weights[gw] * df[i, "$(gw)_Pts"] * (starter[i] + captain[i]) 
+            for i in 1:n, gw in 1:5))
+
+	# Budget
+	@constraint(model, sum(df[i, "BV"] * squad[i] for i in 1:n) <= 100.0)
+
+	# Squad composition
+	@constraint(model, sum(squad) == 15)
+	@constraint(model, sum(starter) == 11)
+	@constraint(model, sum(captain) == 1)
+	@constraint(model, sum(squad[i] for i in 1:n if df[i, "Pos"] == "G") == 2)
+	@constraint(model, sum(squad[i] for i in 1:n if df[i, "Pos"] == "D") == 5)
+	@constraint(model, sum(squad[i] for i in 1:n if df[i, "Pos"] == "M") == 5)
+	@constraint(model, sum(squad[i] for i in 1:n if df[i, "Pos"] == "F") == 3)
+
+	# Team limits
+	for team in unique(df.Team)
+		@constraint(model, sum(squad[i] for i in 1:n if df[i, "Team"] == team) <= 3)
+		@constraint(model, sum(squad[i] for i in 1:n if df[i, "Team"] == team && (df[i, "Pos"] == "G" || df[i, "Pos"] == "D")) <= 2)
+	end
+
+	# Hierarchy
+	for i in 1:n
+		@constraint(model, starter[i] <= squad[i])
+		@constraint(model, captain[i] <= starter[i])
+	end
+
+	# Formations
+	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "G") == 1)
+	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "D") >= 3)
+	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "D") <= 5)
+	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "M") >= 2)
+	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "M") <= 5)
+	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "F") >= 1)
+	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "F") <= 3)
+	
+	optimize!(model)
+    squad_indices = findall(i -> value(squad[i]) > 0.5, 1:n)
+    
+    return process_squad_data(squad_indices, df, starter, captain)
 end
 
-# ╔═╡ a1b2c3d4-5e6f-7890-abcd-123456789012
-display_squad(team, captain_name, bench_names, total_cost, expected_points)
+# ╔═╡ 70c6b543-2c1e-4584-aa89-8192415adea9
+# ╠═╡ show_logs = false
+team1, captain_name1, bench_names1 = optimise_multigw(df);
+
+# ╔═╡ 706c3003-7bdd-49b6-a358-ccd079cdb5f0
+display_squad(team1, captain_name1, bench_names1)
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -809,12 +873,17 @@ version = "17.4.0+2"
 """
 
 # ╔═╡ Cell order:
+# ╠═15da7d9d-aacd-43c0-ab71-5f37fadd84e8
+# ╠═c49d25ca-2221-48b2-b976-8a77b47acc9d
 # ╠═12e84154-4ce3-42db-8ff8-1a9eebdeb42d
 # ╠═4e91c566-5db0-4386-a587-8932ac0eacb6
 # ╠═072e91ef-b912-47f4-90e9-a55f33a00f2b
 # ╠═24596058-0dd5-45d3-8eae-50ce1d674bc5
-# ╠═a1b2c3d4-5e6f-7890-abcd-123456789012
+# ╠═b772bbf9-6659-4b6e-a808-798ba392399f
+# ╠═a8a47da5-ebe9-49c2-ad03-1eda45c0c9c3
+# ╠═70c6b543-2c1e-4584-aa89-8192415adea9
+# ╠═706c3003-7bdd-49b6-a358-ccd079cdb5f0
 # ╠═d1e2f3a4-5b6c-7d8e-9f0a-123456789abc
-# ╠═e2f3a4b5-6c7d-8e9f-0a1b-234567890def
+# ╠═a553d54e-7719-417e-9d34-a3e2f9075e42
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
