@@ -32,9 +32,34 @@ end;
 
 # ╔═╡ 4e91c566-5db0-4386-a587-8932ac0eacb6
 begin
-	df = CSV.read("../data/projection.csv", DataFrame)
+	df = CSV.read("../data/gw1-projection.csv", DataFrame)
 	sort(df, "1_Pts", rev=true)
 end
+
+# ╔═╡ 2647091a-c11f-4033-9dd1-1acdf4aed5a4
+begin
+	df2 = CSV.read("../data/gw2-projection.csv", DataFrame)
+	sort(df2, "2_Pts", rev=true)
+end
+
+# ╔═╡ 66daa5ae-fa7b-489d-a089-d7123e962224
+current_team = [
+    "Sánchez",      # GK
+    "Pedro Porro",  # DEF
+    "Romero", 		# DEF  
+    "Tarkowski",    # DEF
+    "Gabriel",      # DEF
+    "Wirtz",        # MID
+    "B.Fernandes",  # MID
+    "Palmer",       # MID
+    "M.Salah",      # MID
+    "Mateta",       # FWD
+    "Luís Hemir",   # FWD
+    "Dúbravka",     # GK (bench)
+    "Barnes",       # FWD (bench)
+    "Tielemans",    # MID (bench)
+    "Estève"        # DEF (bench)
+]
 
 # ╔═╡ d1e2f3a4-5b6c-7d8e-9f0a-123456789abc
 function display_squad(results_df, captain_name, bench_names)
@@ -208,6 +233,134 @@ team1, captain_name1, bench_names1 = optimise_multiple_gw(df);
 # ╔═╡ 706c3003-7bdd-49b6-a358-ccd079cdb5f0
 display_squad(team1, captain_name1, bench_names1)
 
+# ╔═╡ d814c463-5b39-4966-884d-a794c6ebaa07
+function optimise_with_current_team(df, current_team_names)
+    model = Model(HiGHS.Optimizer)
+    
+    n = nrow(df)
+    num_gw = 5 
+
+    current_team_indices = Int[]
+    current_team_value = 0.0
+    
+    for name in current_team_names
+        idx = findfirst(row -> row.Name == name, eachrow(df))
+        if idx !== nothing
+            push!(current_team_indices, idx)
+            current_team_value += df[idx, "SV"] 
+            println("Found player: $name at index $idx (SV: $(df[idx, "SV"]), BV: $(df[idx, "BV"]))")
+        else
+            @warn "Player $name not found in data"
+        end
+    end
+    
+    println("\nFound $(length(current_team_indices)) out of $(length(current_team_names)) players")
+    println("Current team value (selling): £$(round(current_team_value, digits=1))m")
+    
+    if length(current_team_indices) != 15
+        error("Expected 15 players, found $(length(current_team_indices)). Please check player names.")
+    end
+
+    @variable(model, squad[1:n, 1:num_gw], Bin)
+    @variable(model, starter[1:n, 1:num_gw], Bin)
+    @variable(model, captain[1:n, 1:num_gw], Bin)
+    @variable(model, transfer_in[1:n, 1:num_gw], Bin)  
+    @variable(model, transfer_out[1:n, 1:num_gw], Bin) 
+    @variable(model, bank[1:num_gw] >= 0)
+
+    @objective(model, Max, 
+        sum(df[i, "$(gw+1)_Pts"] * 
+            (starter[i, gw] + captain[i, gw] + BENCH_WEIGHT * (squad[i, gw] - starter[i, gw])) 
+            for i in 1:n, gw in 1:num_gw if gw+1 <= 6))
+
+    @constraint(model, bank[1] == 0)
+
+    for gw in 1:num_gw
+        @constraint(model, sum(transfer_in[i, gw] for i in 1:n) <= 1)
+        @constraint(model, sum(transfer_out[i, gw] for i in 1:n) <= 1)
+        @constraint(model, sum(transfer_in[i, gw] for i in 1:n) == sum(transfer_out[i, gw] for i in 1:n))
+    end
+
+    for gw in 1:num_gw, i in 1:n
+        if gw == 1
+            @constraint(model, squad[i, gw] == (i in current_team_indices ? 1 : 0) + transfer_in[i, gw] - transfer_out[i, gw])
+        else
+            @constraint(model, squad[i, gw] == squad[i, gw-1] + transfer_in[i, gw] - transfer_out[i, gw])
+        end
+    end
+    
+    for gw in 1:num_gw
+        if gw == 1
+            @constraint(model, bank[gw] == 
+                sum(df[i, "SV"] * transfer_out[i, gw] for i in 1:n) - 
+                sum(df[i, "BV"] * transfer_in[i, gw] for i in 1:n))
+        else
+            @constraint(model, bank[gw] == bank[gw-1] + 
+                sum(df[i, "SV"] * transfer_out[i, gw] for i in 1:n) - 
+                sum(df[i, "BV"] * transfer_in[i, gw] for i in 1:n))
+        end
+    end
+
+    for gw in 1:num_gw
+        @constraint(model, sum(df[i, "BV"] * squad[i, gw] for i in 1:n) <= BUDGET)
+        @constraint(model, sum(squad[i, gw] for i in 1:n) == 15)
+        @constraint(model, sum(starter[i, gw] for i in 1:n) == 11)
+        @constraint(model, sum(captain[i, gw] for i in 1:n) == 1)
+        @constraint(model, sum(squad[i, gw] for i in 1:n if df[i, "Pos"] == "G") == 2)
+        @constraint(model, sum(squad[i, gw] for i in 1:n if df[i, "Pos"] == "D") == 5)
+        @constraint(model, sum(squad[i, gw] for i in 1:n if df[i, "Pos"] == "M") == 5)
+        @constraint(model, sum(squad[i, gw] for i in 1:n if df[i, "Pos"] == "F") == 3)
+
+        for team in unique(df.Team)
+            @constraint(model, sum(squad[i, gw] for i in 1:n if df[i, "Team"] == team) <= 3)
+        end
+
+        for i in 1:n
+            @constraint(model, starter[i, gw] <= squad[i, gw])
+            @constraint(model, captain[i, gw] <= starter[i, gw])
+        end
+
+        @constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "G") == 1)
+        @constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "D") >= 3)
+        @constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "D") <= 5)
+        @constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "M") >= 2)
+        @constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "M") <= 5)
+        @constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "F") >= 1)
+        @constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "F") <= 3)
+    end
+
+    optimize!(model)
+    
+    n = nrow(df)
+    squads_by_gw = Dict()
+    transfers_by_gw = Dict()
+    
+    for gw in 1:num_gw
+        actual_gw = gw + 1 
+        squad_idx = findall(i -> value(squad[i, gw]) > 0.5, 1:n)
+        starter_idx = findall(i -> value(starter[i, gw]) > 0.5, 1:n)
+        captain_idx = findfirst(i -> value(captain[i, gw]) > 0.5, 1:n)
+        
+        squad_df, captain_name, bench_names = process_squad_data(squad_idx, starter_idx, captain_idx, df; gameweek=actual_gw)
+        squads_by_gw[actual_gw] = (squad_df, captain_name, bench_names)
+        
+        if gw >= 1 
+            transfers_in_idx = findall(i -> value(transfer_in[i, gw]) > 0.5, 1:n)
+            transfers_out_idx = findall(i -> value(transfer_out[i, gw]) > 0.5, 1:n)
+            
+            transfers_in = ["$(df[i, "Name"]) ($(df[i, "Pos"]), $(df[i, "Team"]), £$(df[i, "BV"])m)" for i in transfers_in_idx]
+            transfers_out = ["$(df[i, "Name"]) ($(df[i, "Pos"]), $(df[i, "Team"]), £$(df[i, "SV"])m)" for i in transfers_out_idx]
+            
+            transfers_by_gw[actual_gw] = (transfers_in, transfers_out)
+        end
+    end
+
+    return squads_by_gw, transfers_by_gw
+end
+
+# ╔═╡ b05b131c-6c65-403f-b7d0-4b36d8f862b9
+squads_by_gw2, transfers_by_gw2 = optimise_with_current_team(df2, current_team)
+
 # ╔═╡ 2f24be02-0afc-4432-872f-ff33efb78b9e
 function display_transfer_plan(squads_by_gw, transfers_by_gw)
     for gw in sort(collect(keys(squads_by_gw)))
@@ -244,6 +397,9 @@ function display_transfer_plan(squads_by_gw, transfers_by_gw)
         println("\n Expected Points: $(round(total_points, digits=1))")
     end
 end
+
+# ╔═╡ 9fdbb408-9e6e-49e7-aef1-151a467f7ea3
+display_transfer_plan(squads_by_gw2, transfers_by_gw2)
 
 # ╔═╡ 0a8afa6f-d7d3-4670-afed-b08b04ca068a
 function extract_full_transfer_plan(df, squad, starter, captain, transfer_in, transfer_out, num_gw)
@@ -349,6 +505,47 @@ squads_by_gw, transfers_by_gw = optimise_multigw_transfers(df);
 
 # ╔═╡ a45a31b2-c2f8-4193-9f0e-443f03396950
 display_transfer_plan(squads_by_gw, transfers_by_gw)
+
+# ╔═╡ 10296b35-7b06-4c4f-97f9-329834e80f93
+function display_transfer_plan_with_costs(squads_by_gw, transfers_by_gw)
+    for gw in sort(collect(keys(squads_by_gw)))
+        println("\n" * "="^60)
+        println("GAMEWEEK $gw")
+        println("="^60)
+        
+        # Transfers
+        if haskey(transfers_by_gw, gw)
+            transfers_in, transfers_out, num_transfers = transfers_by_gw[gw]
+            
+            if num_transfers > 0
+                println("\nTRANSFERS: $num_transfers")
+                if num_transfers > 1
+                    cost = (num_transfers - 1) * 4
+                    println("COST: -$cost points")
+                end
+                if !isempty(transfers_out)
+                    println("OUT: $(join(transfers_out, ", "))")
+                end
+                if !isempty(transfers_in)
+                    println("IN:  $(join(transfers_in, ", "))")
+                end
+                println()
+            else
+                println("\nTRANSFERS: None")
+                println()
+            end
+        end
+
+        # Squad
+        squad_df, captain_name, bench_names = squads_by_gw[gw]
+        display_squad(squad_df, captain_name, bench_names)
+        
+        # Expected Points
+        total_points = sum(squad_df.xPts[1:11]) + 
+                      (captain_name != "" ? squad_df[squad_df.Name .== captain_name, :xPts][1] : 0)
+        println("\n Expected Points: $(round(total_points, digits=1))")
+    end
+end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -1024,9 +1221,15 @@ version = "17.4.0+2"
 # ╠═5919d90d-8795-4c13-bf9c-20e7e67bc589
 # ╠═da95c136-6f4f-4863-bf87-65837723f2c4
 # ╠═a45a31b2-c2f8-4193-9f0e-443f03396950
+# ╠═2647091a-c11f-4033-9dd1-1acdf4aed5a4
+# ╠═66daa5ae-fa7b-489d-a089-d7123e962224
+# ╠═d814c463-5b39-4966-884d-a794c6ebaa07
+# ╠═b05b131c-6c65-403f-b7d0-4b36d8f862b9
+# ╠═9fdbb408-9e6e-49e7-aef1-151a467f7ea3
 # ╠═d1e2f3a4-5b6c-7d8e-9f0a-123456789abc
 # ╠═a553d54e-7719-417e-9d34-a3e2f9075e42
 # ╠═2f24be02-0afc-4432-872f-ff33efb78b9e
 # ╠═0a8afa6f-d7d3-4670-afed-b08b04ca068a
+# ╠═10296b35-7b06-4c4f-97f9-329834e80f93
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
