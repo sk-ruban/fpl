@@ -10,7 +10,7 @@ begin
 end
 
 # ╔═╡ 1bca1502-8031-11f0-3242-0d1043a241a4
-md"# FPL Single Gameweek Optimiser ⚽"
+md"# FPL Multiple Gameweek Optimiser ⚽"
 
 # ╔═╡ f193ee25-4deb-455d-9884-3211d5786cf2
 # Pluto.jl width settings
@@ -26,6 +26,8 @@ main {
 # Constants
 begin
 	const BUDGET = 100.0
+	const GAMEWEEKS = 5
+	const GAMEWEEK_WEIGHTS = [1.0, 0.9, 0.8, 0.7, 0.6]
 	const BENCH_WEIGHT = 0.1
 	
 	const SQUAD_SIZE = 15
@@ -82,7 +84,7 @@ function process_squad_data(squad_idx, starter_idx, captain_idx, df; gameweek=1)
 end
 
 # ╔═╡ 757049ba-7657-4cea-b5d9-1289809fd4c6
-function optimise_single_gw(df)
+function optimise_multiple_gw(df)
 	model = Model(HiGHS.Optimizer)
 
 	n = nrow(df)
@@ -91,7 +93,7 @@ function optimise_single_gw(df)
 	@variable(model, starter[1:n], Bin)
 	@variable(model, captain[1:n], Bin)
 
-	@objective(model, Max, sum(df[i, "1_Pts"] * (starter[i] + captain[i] + BENCH_WEIGHT * (squad[i] - starter[i])) for i in 1:n))
+    @objective(model, Max, sum(GAMEWEEK_WEIGHTS[gw] * df[i, "$(gw)_Pts"] * (starter[i] + captain[i] + BENCH_WEIGHT * (squad[i] - starter[i])) for i in 1:n, gw in 1:GAMEWEEKS))
 
 	# Budget
 	@constraint(model, sum(df[i, "BV"] * squad[i] for i in 1:n) <= BUDGET)
@@ -135,7 +137,7 @@ function optimise_single_gw(df)
 end
 
 # ╔═╡ 09efab45-6fbd-49e0-ada9-a7cdbea18504
-team, captain_name, bench_names = optimise_single_gw(df); 
+team, captain_name, bench_names = optimise_multiple_gw(df); 
 
 # ╔═╡ 4505094b-14b2-44c8-8fbf-c88cf194bdde
 function display_squad(results_df, captain_name, bench_names)
@@ -158,7 +160,29 @@ end
 begin
 	display_squad(team, captain_name, bench_names)
 	println("Total Cost: £$(round(sum(team.Price), digits=1))m")
-	println("Expected Points: $(round(sum(team.xPts[1:11]) + team[team.Name .== captain_name, :xPts][1], digits=1))")
+	
+	total_weighted = 0.0
+	
+	for gw in 1:GAMEWEEKS
+        gw_col = "$(gw)_Pts"
+        gw_points = 0.0
+        
+        for i in 1:11 
+            player_name = team[i, :Name]
+            player_row = findfirst(df.Name .== player_name)
+            if player_row !== nothing
+                pts = df[player_row, gw_col]
+                gw_points += pts
+                if player_name == captain_name
+                    gw_points += pts 
+                end
+            end
+        end
+        
+        weighted = gw_points * GAMEWEEK_WEIGHTS[gw]
+        total_weighted += weighted
+        println("GW$gw: $(round(gw_points, digits=1)) pts × $(GAMEWEEK_WEIGHTS[gw]) = $(round(weighted, digits=1))")
+    end
 end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
