@@ -10,7 +10,7 @@ begin
 end
 
 # ╔═╡ 1bca1502-8031-11f0-3242-0d1043a241a4
-md"# FPL Multi-Gameweek Optimiser ⚽"
+md"# FPL Multi-Gameweek Optimiser with Transfers ⚽"
 
 # ╔═╡ f193ee25-4deb-455d-9884-3211d5786cf2
 # Pluto.jl width settings
@@ -23,7 +23,6 @@ main {
 """
 
 # ╔═╡ 20ca06b0-bbe8-4a89-b0cc-99487ff2fbe0
-# Constants
 begin
 	const BUDGET = 100.0
 	const START_GW = 1
@@ -85,60 +84,102 @@ function process_squad_data(squad_idx, starter_idx, captain_idx, df; gameweek=1)
     return results, captain_name, bench_names
 end
 
+# ╔═╡ cadf55af-c61b-48d8-b292-72438005c856
+function extract_transfer_plan(df, squad, starter, captain, transfer_in, transfer_out)
+    n = nrow(df)
+    squads_by_gw = Dict()
+    transfers_by_gw = Dict()
+    
+    for gw in START_GW:END_GW
+		squad_idx = findall(i -> value(squad[i, gw]) > 0.5, 1:n)
+        starter_idx = findall(i -> value(starter[i, gw]) > 0.5, 1:n)
+        captain_idx = findfirst(i -> value(captain[i, gw]) > 0.5, 1:n)
+		
+        squad_df, captain_name, bench_names = process_squad_data(squad_idx, starter_idx, captain_idx, df; gameweek=gw)
+        squads_by_gw[gw] = (squad_df, captain_name, bench_names)
+        
+        if gw > START_GW
+            transfers_in_idx = findall(i -> value(transfer_in[i, gw]) > 0.5, 1:n)
+            transfers_out_idx = findall(i -> value(transfer_out[i, gw]) > 0.5, 1:n)
+            
+            transfers_in = ["$(df[i, "Name"]) ($(df[i, "Pos"]), $(df[i, "Team"]), £$(df[i, "BV"])m)" for i in transfers_in_idx]
+            transfers_out = ["$(df[i, "Name"]) ($(df[i, "Pos"]), $(df[i, "Team"]), £$(df[i, "BV"])m)" for i in transfers_out_idx]
+            
+            transfers_by_gw[gw] = (transfers_in, transfers_out)
+        end
+    end
+    
+    return squads_by_gw, transfers_by_gw
+end
+
 # ╔═╡ 757049ba-7657-4cea-b5d9-1289809fd4c6
-function optimise_multiple_gw(df)
+function optimise_multiple_gw_transfers(df)
 	model = Model(HiGHS.Optimizer)
 	n = nrow(df)
 
-	@variable(model, squad[1:n], Bin)
-	@variable(model, starter[1:n], Bin)
-	@variable(model, captain[1:n], Bin)
+    @variable(model, squad[1:n, START_GW:END_GW], Bin)
+    @variable(model, starter[1:n, START_GW:END_GW], Bin)
+    @variable(model, captain[1:n, START_GW:END_GW], Bin)
+    @variable(model, transfer_in[1:n, (START_GW + 1):END_GW], Bin) 
+    @variable(model, transfer_out[1:n, (START_GW + 1):END_GW], Bin)
 
-    @objective(model, Max, sum(GAMEWEEK_WEIGHTS[gw] * df[i, "$(gw)_Pts"] * (starter[i] + captain[i] + BENCH_WEIGHT * (squad[i] - starter[i])) for i in 1:n, gw in START_GW:END_GW))
+    @objective(model, Max, sum(GAMEWEEK_WEIGHTS[gw] * df[i, "$(gw)_Pts"] * (starter[i, gw] + captain[i, gw] + BENCH_WEIGHT * (squad[i, gw] - starter[i, gw])) for i in 1:n, gw in START_GW:END_GW))
 
-	# Budget
-	@constraint(model, sum(df[i, "BV"] * squad[i] for i in 1:n) <= BUDGET)
+	# Transfer
+    for gw in (START_GW + 1):END_GW
+        @constraint(model, sum(transfer_in[i, gw] for i in 1:n) <= 1)
+        @constraint(model, sum(transfer_out[i, gw] for i in 1:n) <= 1)
+        @constraint(model, sum(transfer_in[i, gw] for i in 1:n) == sum(transfer_out[i, gw] for i in 1:n))
+    end
 
-	# Squad composition
-	@constraint(model, sum(squad) == SQUAD_SIZE)
-	@constraint(model, sum(starter) == STARTING_SIZE)
-	@constraint(model, sum(captain) == CAPTAINS_PER_TEAM)
-	@constraint(model, sum(squad[i] for i in 1:n if df[i, "Pos"] == "G") == GK_REQUIRED)
-	@constraint(model, sum(squad[i] for i in 1:n if df[i, "Pos"] == "D") == DEF_REQUIRED)
-	@constraint(model, sum(squad[i] for i in 1:n if df[i, "Pos"] == "M") == MID_REQUIRED)
-	@constraint(model, sum(squad[i] for i in 1:n if df[i, "Pos"] == "F") == FWD_REQUIRED)
+	# Squad evolution
+    for gw in (START_GW + 1):END_GW, i in 1:n
+        @constraint(model, squad[i, gw] == squad[i, gw-1] + transfer_in[i, gw] - transfer_out[i, gw])
+    end
 
-	# Team limits
-	for team in unique(df.Team)
-		@constraint(model, sum(squad[i] for i in 1:n if df[i, "Team"] == team) <= MAX_PLAYERS_PER_TEAM)
-		@constraint(model, sum(squad[i] for i in 1:n if df[i, "Team"] == team && (df[i, "Pos"] == "G" || df[i, "Pos"] == "D")) <= MAX_DEFENDERS_SAME_TEAM)
+	for gw in START_GW:END_GW
+		# Budget
+		@constraint(model, sum(df[i, "BV"] * squad[i, gw] for i in 1:n) <= BUDGET)
+	
+		# Squad composition
+        @constraint(model, sum(squad[i, gw] for i in 1:n) == SQUAD_SIZE)
+        @constraint(model, sum(starter[i, gw] for i in 1:n) == STARTING_SIZE)
+        @constraint(model, sum(captain[i, gw] for i in 1:n) == CAPTAINS_PER_TEAM)
+        @constraint(model, sum(squad[i, gw] for i in 1:n if df[i, "Pos"] == "G") == GK_REQUIRED)
+        @constraint(model, sum(squad[i, gw] for i in 1:n if df[i, "Pos"] == "D") == DEF_REQUIRED)
+        @constraint(model, sum(squad[i, gw] for i in 1:n if df[i, "Pos"] == "M") == MID_REQUIRED)
+        @constraint(model, sum(squad[i, gw] for i in 1:n if df[i, "Pos"] == "F") == FWD_REQUIRED)
+	
+		# Team limits
+		for team in unique(df.Team)
+			@constraint(model, sum(squad[i, gw] for i in 1:n if df[i, "Team"] == team) <= MAX_PLAYERS_PER_TEAM)
+			@constraint(model, sum(squad[i, gw] for i in 1:n if df[i, "Team"] == team && (df[i, "Pos"] == "G" || df[i, "Pos"] == "D")) <= MAX_DEFENDERS_SAME_TEAM)
+		end
+	
+		# Hierarchy
+		for i in 1:n
+            @constraint(model, starter[i, gw] <= squad[i, gw])
+            @constraint(model, captain[i, gw] <= starter[i, gw])
+		end
+	
+		# Formations
+		@constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "G") == 1)
+		@constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "D") >= 3)
+		@constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "D") <= 5)
+		@constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "M") >= 2)
+		@constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "M") <= 5)
+		@constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "F") >= 1)
+		@constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "F") <= 3)
 	end
-
-	# Hierarchy
-	for i in 1:n
-		@constraint(model, starter[i] <= squad[i])
-		@constraint(model, captain[i] <= starter[i])
-	end
-
-	# Formations
-	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "G") == 1)
-	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "D") >= 3)
-	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "D") <= 5)
-	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "M") >= 2)
-	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "M") <= 5)
-	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "F") >= 1)
-	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "F") <= 3)
 	
 	optimize!(model)
-    squad_idx = findall(i -> value(squad[i]) > 0.5, 1:n)
-    starter_idx = findall(i -> value(starter[i]) > 0.5, 1:n)
-    captain_idx = findfirst(i -> value(captain[i]) > 0.5, 1:n)
-    
-    return process_squad_data(squad_idx, starter_idx, captain_idx, df)
+
+    return extract_transfer_plan(df, squad, starter, captain, transfer_in, transfer_out)
 end
 
 # ╔═╡ 09efab45-6fbd-49e0-ada9-a7cdbea18504
-team, captain_name, bench_names = optimise_multiple_gw(df); 
+# ╠═╡ show_logs = false
+squads_by_gw, transfers_by_gw = optimise_multiple_gw_transfers(df); 
 
 # ╔═╡ 4505094b-14b2-44c8-8fbf-c88cf194bdde
 function display_squad(results_df, captain_name, bench_names)
@@ -157,34 +198,45 @@ function display_squad(results_df, captain_name, bench_names)
     pretty_table(results_df; highlighters = (captain_highlighter, bench_highlighter)) 
 end
 
-# ╔═╡ 2061c3cd-b345-46aa-9fd3-ae8bf12e8e1e
-begin
-	display_squad(team, captain_name, bench_names)
-	println("Total Cost: £$(round(sum(team.Price), digits=1))m")
-	
-	total_weighted = 0.0
-	
-	for gw in START_GW:END_GW
-        gw_col = "$(gw)_Pts"
-        gw_points = 0.0
+# ╔═╡ 09cc7b0f-2955-4c04-ba3a-360072d34146
+function display_transfer_plan(squads_by_gw, transfers_by_gw)
+    for gw in sort(collect(keys(squads_by_gw)))
+        println("\n" * "="^60)
+        println("GAMEWEEK $gw")
+        println("="^60)
         
-        for i in 1:11 
-            player_name = team[i, :Name]
-            player_row = findfirst(df.Name .== player_name)
-            if player_row !== nothing
-                pts = df[player_row, gw_col]
-                gw_points += pts
-                if player_name == captain_name
-                    gw_points += pts 
+        # Transfers
+        if gw > 1 && haskey(transfers_by_gw, gw)
+            transfers_in, transfers_out = transfers_by_gw[gw]
+            
+            if !isempty(transfers_in) || !isempty(transfers_out)
+                println("\nTRANSFERS:")
+                if !isempty(transfers_out)
+                    println("OUT: $(join(transfers_out, ", "))")
                 end
+                if !isempty(transfers_in)
+                    println("IN:  $(join(transfers_in, ", "))")
+                end
+                println()
+            else
+                println("\nTRANSFERS: None")
+                println()
             end
         end
+
+		# Squad
+        squad_df, captain_name, bench_names = squads_by_gw[gw]
+        display_squad(squad_df, captain_name, bench_names)
         
-        weighted = gw_points * GAMEWEEK_WEIGHTS[gw]
-        total_weighted += weighted
-        println("GW$gw: $(round(gw_points, digits=1)) pts × $(GAMEWEEK_WEIGHTS[gw]) = $(round(weighted, digits=1))")
+        # Expected Points
+        total_points = sum(squad_df.xPts[1:11]) + 
+                      (captain_name != "" ? squad_df[squad_df.Name .== captain_name, :xPts][1] : 0)
+        println("\n Expected Points: $(round(total_points, digits=1))")
     end
 end
+
+# ╔═╡ 2061c3cd-b345-46aa-9fd3-ae8bf12e8e1e
+display_transfer_plan(squads_by_gw, transfers_by_gw)
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -854,7 +906,9 @@ version = "17.4.0+2"
 # ╠═757049ba-7657-4cea-b5d9-1289809fd4c6
 # ╠═09efab45-6fbd-49e0-ada9-a7cdbea18504
 # ╠═2061c3cd-b345-46aa-9fd3-ae8bf12e8e1e
+# ╠═cadf55af-c61b-48d8-b292-72438005c856
 # ╠═50a83055-a467-48b0-80dc-77c51d248248
 # ╠═4505094b-14b2-44c8-8fbf-c88cf194bdde
+# ╠═09cc7b0f-2955-4c04-ba3a-360072d34146
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
