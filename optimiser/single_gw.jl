@@ -4,7 +4,7 @@
 using Markdown
 using InteractiveUtils
 
-# ╔═╡ d2ba2eab-2c55-4326-ab18-daba995220e8
+# ╔═╡ b8676394-6393-44c7-b924-cd128c4445f4
 begin
 	using CSV, DataFrames, JuMP, HiGHS, PlutoUI, PrettyTables
 end
@@ -29,8 +29,7 @@ begin
 	const BENCH_WEIGHT = 0.1
 	
 	const SQUAD_SIZE = 15
-	const STARTING_SIZE = 11
-	const CAPTAINS_PER_TEAM = 1
+	const STARTING_XI = 11
     const MAX_PLAYERS_PER_TEAM = 3
 	const MAX_DEFENDERS_SAME_TEAM = 2
 
@@ -38,16 +37,18 @@ begin
     const DEF_REQUIRED = 5
     const MID_REQUIRED = 5
     const FWD_REQUIRED = 3
+
+	const START_GW = 1
 end;
 
 # ╔═╡ 1980f18c-2054-4cfe-b07e-da8203cacd1b
 begin
-	df = CSV.read("../data/gw1-projection.csv", DataFrame)
-	sort!(df, "1_Pts", rev=true)
+	df = CSV.read("../data/gw$(START_GW)-projection.csv", DataFrame)
+	sort!(df, "$(START_GW)_Pts", rev=true)
 end
 
 # ╔═╡ 50a83055-a467-48b0-80dc-77c51d248248
-function process_squad_data(squad_idx, starter_idx, captain_idx, df; gameweek=1)
+function format_squad_for_display(squad_idx, starter_idx, captain_idx, df)
 
     results = DataFrame(
         Name = String[],
@@ -58,22 +59,19 @@ function process_squad_data(squad_idx, starter_idx, captain_idx, df; gameweek=1)
     )
     
     pos_priority = Dict("G" => 1, "D" => 2, "M" => 3, "F" => 4)
-    pts_col = "$(gameweek)_Pts"
+    pts_col = "$(START_GW)_Pts"
+
+	bench_idx = setdiff(squad_idx, starter_idx)
 
 	starters = [(df[i, "Name"], df[i, "Pos"], df[i, "Team"], df[i, "BV"], df[i, pts_col]) for i in starter_idx]
-
-    bench_idx = setdiff(squad_idx, starter_idx)
-    bench_players = [(df[i, "Name"], df[i, "Pos"], df[i, "Team"], df[i, "BV"], df[i, pts_col]) for i in bench_idx]
+    bench = [(df[i, "Name"], df[i, "Pos"], df[i, "Team"], df[i, "BV"], df[i, pts_col]) for i in bench_idx]
     
     sort!(starters, by = x -> (pos_priority[x[2]], -x[5]))
-    sort!(bench_players, by = x -> (pos_priority[x[2]], -x[5]))
+    sort!(bench, by = x -> (pos_priority[x[2]], -x[5]))
     
-    for player in starters
-        push!(results, player)
-    end
-    for player in bench_players
-        push!(results, player)
-    end
+	for player in vcat(starters, bench)
+		push!(results, player)
+	end
     
     captain_name = df[captain_idx, "Name"]
     bench_names = Set([df[i, "Name"] for i in bench_idx])
@@ -82,24 +80,24 @@ function process_squad_data(squad_idx, starter_idx, captain_idx, df; gameweek=1)
 end
 
 # ╔═╡ 757049ba-7657-4cea-b5d9-1289809fd4c6
-function optimise_single_gw(df)
+function optimise_single_gameweek(df)
 	model = Model(HiGHS.Optimizer)
-
 	n = nrow(df)
 
-	@variable(model, squad[1:n], Bin)
-	@variable(model, starter[1:n], Bin)
-	@variable(model, captain[1:n], Bin)
+	@variable(model, squad[1:n], Bin)	# 1 if player i is in 15-man squad
+	@variable(model, starter[1:n], Bin)	# 1 if player i is in starting XI
+	@variable(model, captain[1:n], Bin) # 1 if player i is captain
 
-	@objective(model, Max, sum(df[i, "1_Pts"] * (starter[i] + captain[i] + BENCH_WEIGHT * (squad[i] - starter[i])) for i in 1:n))
+	# Objective: maximise expected points
+	@objective(model, Max, sum(df[i, "$(START_GW)_Pts"] * (starter[i] + captain[i] + BENCH_WEIGHT * (squad[i] - starter[i])) for i in 1:n))
 
 	# Budget
 	@constraint(model, sum(df[i, "BV"] * squad[i] for i in 1:n) <= BUDGET)
 
 	# Squad composition
 	@constraint(model, sum(squad) == SQUAD_SIZE)
-	@constraint(model, sum(starter) == STARTING_SIZE)
-	@constraint(model, sum(captain) == CAPTAINS_PER_TEAM)
+	@constraint(model, sum(starter) == STARTING_XI)
+	@constraint(model, sum(captain) == 1)
 	@constraint(model, sum(squad[i] for i in 1:n if df[i, "Pos"] == "G") == GK_REQUIRED)
 	@constraint(model, sum(squad[i] for i in 1:n if df[i, "Pos"] == "D") == DEF_REQUIRED)
 	@constraint(model, sum(squad[i] for i in 1:n if df[i, "Pos"] == "M") == MID_REQUIRED)
@@ -113,32 +111,31 @@ function optimise_single_gw(df)
 
 	# Hierarchy
 	for i in 1:n
-		@constraint(model, starter[i] <= squad[i])
-		@constraint(model, captain[i] <= starter[i])
+		@constraint(model, starter[i] <= squad[i])	  # Can only start if in squad
+		@constraint(model, captain[i] <= starter[i])  # Can only captain if starting
 	end
 
-	# Formations
+	# Valid formations
 	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "G") == 1)
-	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "D") >= 3)
-	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "D") <= 5)
-	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "M") >= 2)
-	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "M") <= 5)
-	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "F") >= 1)
-	@constraint(model, sum(starter[i] for i in 1:n if df[i, "Pos"] == "F") <= 3)
+	@constraint(model, 3 <= sum(starter[i] for i in 1:n if df[i, "Pos"] == "D") <= 5)
+	@constraint(model, 2 <= sum(starter[i] for i in 1:n if df[i, "Pos"] == "M") <= 5)
+	@constraint(model, 1 <= sum(starter[i] for i in 1:n if df[i, "Pos"] == "F") <= 3)
 	
 	optimize!(model)
+	
     squad_idx = findall(i -> value(squad[i]) > 0.5, 1:n)
     starter_idx = findall(i -> value(starter[i]) > 0.5, 1:n)
     captain_idx = findfirst(i -> value(captain[i]) > 0.5, 1:n)
     
-    return process_squad_data(squad_idx, starter_idx, captain_idx, df)
+    return format_squad_for_display(squad_idx, starter_idx, captain_idx, df)
 end
 
 # ╔═╡ 09efab45-6fbd-49e0-ada9-a7cdbea18504
-team, captain_name, bench_names = optimise_single_gw(df); 
+# ╠═╡ show_logs = false
+team, captain_name, bench_names = optimise_single_gameweek(df); 
 
 # ╔═╡ 4505094b-14b2-44c8-8fbf-c88cf194bdde
-function display_squad(results_df, captain_name, bench_names)
+function display_squad(team, captain_name, bench_names)
 
     captain_highlighter = Highlighter(
         (data, i, j) -> i > 1 && string(data[i, 1]) == captain_name,
@@ -151,7 +148,7 @@ function display_squad(results_df, captain_name, bench_names)
         background = :blue
     )
 
-    pretty_table(results_df; highlighters = (captain_highlighter, bench_highlighter)) 
+    pretty_table(team; highlighters = (captain_highlighter, bench_highlighter)) 
 end
 
 # ╔═╡ 2061c3cd-b345-46aa-9fd3-ae8bf12e8e1e
@@ -823,8 +820,8 @@ version = "17.4.0+2"
 # ╔═╡ Cell order:
 # ╠═1bca1502-8031-11f0-3242-0d1043a241a4
 # ╠═f193ee25-4deb-455d-9884-3211d5786cf2
+# ╠═b8676394-6393-44c7-b924-cd128c4445f4
 # ╠═20ca06b0-bbe8-4a89-b0cc-99487ff2fbe0
-# ╠═d2ba2eab-2c55-4326-ab18-daba995220e8
 # ╠═1980f18c-2054-4cfe-b07e-da8203cacd1b
 # ╠═757049ba-7657-4cea-b5d9-1289809fd4c6
 # ╠═09efab45-6fbd-49e0-ada9-a7cdbea18504

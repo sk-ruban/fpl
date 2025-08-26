@@ -24,15 +24,15 @@ main {
 
 # ╔═╡ 20ca06b0-bbe8-4a89-b0cc-99487ff2fbe0
 begin
-	const BUDGET = 100.0
 	const START_GW = 1
 	const NUM_GAMEWEEKS = 5
+	
+	const BUDGET = 100.0
 	const GAMEWEEK_WEIGHTS = [1.0, 0.9, 0.8, 0.7, 0.6]
 	const BENCH_WEIGHT = 0.1
 	
 	const SQUAD_SIZE = 15
-	const STARTING_SIZE = 11
-	const CAPTAINS_PER_TEAM = 1
+	const STARTING_XI = 11
     const MAX_PLAYERS_PER_TEAM = 3
 	const MAX_DEFENDERS_SAME_TEAM = 2
 
@@ -45,8 +45,8 @@ end;
 # ╔═╡ 1980f18c-2054-4cfe-b07e-da8203cacd1b
 begin
 	END_GW = START_GW + NUM_GAMEWEEKS - 1
-	df = CSV.read("../data/gw1-projection.csv", DataFrame)
-	sort!(df, "1_Pts", rev=true)
+	df = CSV.read("../data/gw$(START_GW)-projection.csv", DataFrame)
+	sort!(df, "$(START_GW)_Pts", rev=true)
 end
 
 # ╔═╡ 50a83055-a467-48b0-80dc-77c51d248248
@@ -120,10 +120,14 @@ function optimise_multiple_gw_transfers(df)
     @variable(model, squad[1:n, START_GW:END_GW], Bin)
     @variable(model, starter[1:n, START_GW:END_GW], Bin)
     @variable(model, captain[1:n, START_GW:END_GW], Bin)
+
+	# Key differences: 
+	# - Squad changes over time via transfers (1 per gameweek)
+	# - Each gameweek has its own squad/lineup/captain
     @variable(model, transfer_in[1:n, (START_GW + 1):END_GW], Bin) 
     @variable(model, transfer_out[1:n, (START_GW + 1):END_GW], Bin)
 
-    @objective(model, Max, sum(GAMEWEEK_WEIGHTS[gw] * df[i, "$(gw)_Pts"] * (starter[i, gw] + captain[i, gw] + BENCH_WEIGHT * (squad[i, gw] - starter[i, gw])) for i in 1:n, gw in START_GW:END_GW))
+    @objective(model, Max, sum(GAMEWEEK_WEIGHTS[gw - START_GW + 1] * df[i, "$(gw)_Pts"] * (starter[i, gw] + captain[i, gw] + BENCH_WEIGHT * (squad[i, gw] - starter[i, gw])) for i in 1:n, gw in START_GW:END_GW))
 
 	# Transfer
     for gw in (START_GW + 1):END_GW
@@ -143,8 +147,8 @@ function optimise_multiple_gw_transfers(df)
 	
 		# Squad composition
         @constraint(model, sum(squad[i, gw] for i in 1:n) == SQUAD_SIZE)
-        @constraint(model, sum(starter[i, gw] for i in 1:n) == STARTING_SIZE)
-        @constraint(model, sum(captain[i, gw] for i in 1:n) == CAPTAINS_PER_TEAM)
+        @constraint(model, sum(starter[i, gw] for i in 1:n) == STARTING_XI)
+        @constraint(model, sum(captain[i, gw] for i in 1:n) == 1)
         @constraint(model, sum(squad[i, gw] for i in 1:n if df[i, "Pos"] == "G") == GK_REQUIRED)
         @constraint(model, sum(squad[i, gw] for i in 1:n if df[i, "Pos"] == "D") == DEF_REQUIRED)
         @constraint(model, sum(squad[i, gw] for i in 1:n if df[i, "Pos"] == "M") == MID_REQUIRED)
@@ -164,12 +168,9 @@ function optimise_multiple_gw_transfers(df)
 	
 		# Formations
 		@constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "G") == 1)
-		@constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "D") >= 3)
-		@constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "D") <= 5)
-		@constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "M") >= 2)
-		@constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "M") <= 5)
-		@constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "F") >= 1)
-		@constraint(model, sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "F") <= 3)
+		@constraint(model, 3 <= sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "D") <= 5)
+		@constraint(model, 2 <= sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "M") <= 5)
+		@constraint(model, 1 <= sum(starter[i, gw] for i in 1:n if df[i, "Pos"] == "F") <= 3)
 	end
 	
 	optimize!(model)
@@ -206,7 +207,7 @@ function display_transfer_plan(squads_by_gw, transfers_by_gw)
         println("="^60)
         
         # Transfers
-        if gw > 1 && haskey(transfers_by_gw, gw)
+        if gw > START_GW && haskey(transfers_by_gw, gw)
             transfers_in, transfers_out = transfers_by_gw[gw]
             
             if !isempty(transfers_in) || !isempty(transfers_out)
