@@ -24,7 +24,7 @@ main {
 
 # ╔═╡ 20ca06b0-bbe8-4a89-b0cc-99487ff2fbe0
 begin
-	const START_GW = 2
+	const START_GW = 4
 	const NUM_GAMEWEEKS = 5
 	
 	const BUDGET = 100.0
@@ -53,12 +53,12 @@ end
 current_team = [
     "Sánchez",      # GK
     "Pedro Porro",  # DEF
-    "Romero", 		# DEF  
+    "Lacroix", 		# DEF  
     "Tarkowski",    # DEF
     "Gabriel",      # DEF
     "Wirtz",        # MID
     "B.Fernandes",  # MID
-    "Palmer",       # MID
+    "Cunha",        # MID
     "M.Salah",      # MID
     "Mateta",       # FWD
     "Luís Hemir",   # FWD
@@ -267,7 +267,7 @@ function display_transfer_plan(squads_by_gw, transfers_by_gw)
         println("="^60)
         
         # Transfers
-        if gw > START_GW && haskey(transfers_by_gw, gw)
+        if haskey(transfers_by_gw, gw)
             transfers_in, transfers_out = transfers_by_gw[gw]
             
             if !isempty(transfers_in) || !isempty(transfers_out)

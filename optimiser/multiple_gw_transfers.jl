@@ -24,7 +24,7 @@ main {
 
 # ╔═╡ 20ca06b0-bbe8-4a89-b0cc-99487ff2fbe0
 begin
-	const START_GW = 1
+	const START_GW = 4
 	const NUM_GAMEWEEKS = 5
 	
 	const BUDGET = 100.0
@@ -196,7 +196,7 @@ function display_squad(results_df, captain_name, bench_names)
         background = :blue
     )
 
-    pretty_table(results_df; highlighters = (captain_highlighter, bench_highlighter)) 
+    pretty_table(results_df; highlighters = (captain_highlighter, bench_highlighter))
 end
 
 # ╔═╡ 09cc7b0f-2955-4c04-ba3a-360072d34146
