@@ -24,7 +24,7 @@ main {
 
 # ╔═╡ 20ca06b0-bbe8-4a89-b0cc-99487ff2fbe0
 begin
-	const START_GW = 5
+	const START_GW = 6
 	const NUM_GAMEWEEKS = 5
 	
 	const BUDGET = 100.0
@@ -58,13 +58,13 @@ current_team = [
     "Gabriel",      # DEF
     "Wirtz",        # MID
     "B.Fernandes",  # MID
+	"Semenyo",      # MID 
     "L.Paquetá",    # MID
     "M.Salah",      # MID
     "Mateta",       # FWD
-    "Luís Hemir",   # FWD
     "Dúbravka",     # GK (bench)
     ("Barnes", "F"),# FWD (bench)
-    "Tielemans",    # MID (bench)
+	"Luís Hemir",   # FWD (bench)
     "Estève"        # DEF (bench)
 ]
 
