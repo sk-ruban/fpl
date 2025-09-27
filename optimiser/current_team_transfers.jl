@@ -24,7 +24,7 @@ main {
 
 # ╔═╡ 20ca06b0-bbe8-4a89-b0cc-99487ff2fbe0
 begin
-	const START_GW = 4
+	const START_GW = 5
 	const NUM_GAMEWEEKS = 5
 	
 	const BUDGET = 100.0
@@ -34,7 +34,7 @@ begin
 	const SQUAD_SIZE = 15
 	const STARTING_XI = 11
     const MAX_PLAYERS_PER_TEAM = 3
-	const MAX_DEFENDERS_SAME_TEAM = 2
+	const MAX_DEFENDERS_SAME_TEAM = 1
 
 	const GK_REQUIRED = 2
     const DEF_REQUIRED = 5
@@ -58,7 +58,7 @@ current_team = [
     "Gabriel",      # DEF
     "Wirtz",        # MID
     "B.Fernandes",  # MID
-    "Cunha",        # MID
+    "L.Paquetá",    # MID
     "M.Salah",      # MID
     "Mateta",       # FWD
     "Luís Hemir",   # FWD
