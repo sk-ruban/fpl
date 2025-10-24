@@ -24,7 +24,7 @@ main {
 
 # ╔═╡ 20ca06b0-bbe8-4a89-b0cc-99487ff2fbe0
 begin
-	const START_GW = 6
+	const START_GW = 7
 	const NUM_GAMEWEEKS = 5
 	
 	const BUDGET = 100.0
@@ -65,7 +65,7 @@ current_team = [
     "Dúbravka",     # GK (bench)
     ("Barnes", "F"),# FWD (bench)
 	"Luís Hemir",   # FWD (bench)
-    "Estève"        # DEF (bench)
+    "Alderete"      # DEF (bench)
 ]
 
 # ╔═╡ 50a83055-a467-48b0-80dc-77c51d248248
