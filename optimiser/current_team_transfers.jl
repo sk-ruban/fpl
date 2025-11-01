@@ -24,7 +24,7 @@ main {
 
 # ╔═╡ 20ca06b0-bbe8-4a89-b0cc-99487ff2fbe0
 begin
-	const START_GW = 7
+	const START_GW = 9
 	const NUM_GAMEWEEKS = 5
 	
 	const BUDGET = 100.0
@@ -51,21 +51,21 @@ end
 
 # ╔═╡ 60c18abf-0391-4dc1-bd62-c2593a95b156
 current_team = [
-    "Sánchez",      # GK
-    "Pedro Porro",  # DEF
+    "Raya",         # GK
+    "Senesi",       # DEF
     "Lacroix", 		# DEF  
-    "Tarkowski",    # DEF
     "Gabriel",      # DEF
-    "Wirtz",        # MID
-    "B.Fernandes",  # MID
+    "Kudus",        # MID
+    "Saka",         # MID
 	"Semenyo",      # MID 
-    "L.Paquetá",    # MID
-    "M.Salah",      # MID
-    "Mateta",       # FWD
+    "Sarr",         # MID
+    "Woltemade",    # FWD
+	"Haaland",      # FWD
+    "Bowen",        # FWD
     "Dúbravka",     # GK (bench)
-    ("Barnes", "F"),# FWD (bench)
-	"Luís Hemir",   # FWD (bench)
-    "Alderete"      # DEF (bench)
+    "Andersen",     # DEF (bench)
+	"Mukiele",      # DEF (bench)
+    "Gonzalez"      # MID (bench)
 ]
 
 # ╔═╡ 50a83055-a467-48b0-80dc-77c51d248248
