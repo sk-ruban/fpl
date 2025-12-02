@@ -24,10 +24,10 @@ main {
 
 # ╔═╡ 20ca06b0-bbe8-4a89-b0cc-99487ff2fbe0
 begin
-	const START_GW = 8
+	const START_GW = 14
 	const NUM_GAMEWEEKS = 7
 	
-	const BUDGET = 100.0
+	const BUDGET = 100.6
 	const GAMEWEEK_WEIGHTS = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4]
 	const BENCH_WEIGHT = 0.1
 	
