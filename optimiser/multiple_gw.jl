@@ -46,7 +46,7 @@ end;
 # ╔═╡ 1980f18c-2054-4cfe-b07e-da8203cacd1b
 begin
 	END_GW = START_GW + NUM_GAMEWEEKS - 1
-	df = CSV.read("../data/gw$(START_GW)-projection.csv", DataFrame)
+	df = CSV.read("../data/gw$(lpad(START_GW, 2, '0'))-projection.csv", DataFrame)
 	sort!(df, "$(START_GW)_Pts", rev=true)
 end
 
