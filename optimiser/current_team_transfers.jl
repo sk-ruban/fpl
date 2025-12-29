@@ -24,7 +24,7 @@ main {
 
 # ╔═╡ 20ca06b0-bbe8-4a89-b0cc-99487ff2fbe0
 begin
-	const START_GW = 15
+	const START_GW = 19
 	const NUM_GAMEWEEKS = 5
 	
 	const BUDGET = 100.6     # REMEMBER TO UPDATE USING SQUAD VALUE
@@ -40,6 +40,9 @@ begin
     const DEF_REQUIRED = 5
     const MID_REQUIRED = 5
     const FWD_REQUIRED = 3
+
+	const MAX_FREE_TRANSFERS = 5
+	const INITIAL_FREE_TRANSFERS = 3
 end;
 
 # ╔═╡ 1980f18c-2054-4cfe-b07e-da8203cacd1b
@@ -104,33 +107,40 @@ function process_squad_data(squad_idx, starter_idx, captain_idx, df; gameweek=1)
 end
 
 # ╔═╡ cadf55af-c61b-48d8-b292-72438005c856
-function extract_transfer_plan_with_bank(df, squad, starter, captain, transfer_in, transfer_out, bank)
+function extract_transfer_plan_with_bank(df, squad, starter, captain, transfer_in, transfer_out, bank, free_transfers, transfers_made)
     n = nrow(df)
     squads_by_gw = Dict()
     transfers_by_gw = Dict()
-    
+    transfer_info_by_gw = Dict()
+
     for gw in START_GW:END_GW
         squad_idx = findall(i -> value(squad[i, gw]) > 0.5, 1:n)
         starter_idx = findall(i -> value(starter[i, gw]) > 0.5, 1:n)
         captain_idx = findfirst(i -> value(captain[i, gw]) > 0.5, 1:n)
-        
+
         squad_df, captain_name, bench_names = process_squad_data(squad_idx, starter_idx, captain_idx, df; gameweek=gw)
         squads_by_gw[gw] = (squad_df, captain_name, bench_names)
-        
+
         transfers_in_idx = findall(i -> value(transfer_in[i, gw]) > 0.5, 1:n)
         transfers_out_idx = findall(i -> value(transfer_out[i, gw]) > 0.5, 1:n)
-        
+
         if !isempty(transfers_in_idx) || !isempty(transfers_out_idx)
             transfers_in = ["$(df[i, "Name"]) ($(df[i, "Pos"]), $(df[i, "Team"]), £$(df[i, "BV"])m)" for i in transfers_in_idx]
-            transfers_out = ["$(df[i, "Name"]) ($(df[i, "Pos"]), $(df[i, "Team"]), £$(df[i, "SV"])m)" for i in transfers_out_idx] 
-            
+            transfers_out = ["$(df[i, "Name"]) ($(df[i, "Pos"]), $(df[i, "Team"]), £$(df[i, "SV"])m)" for i in transfers_out_idx]
+
             transfers_by_gw[gw] = (transfers_in, transfers_out)
         end
-        
-        println("Bank after GW$gw: £$(round(value(bank[gw]), digits=1))m")
+
+		ft_available = round(Int, value(free_transfers[gw]))
+		t_made = round(Int, value(transfers_made[gw]))
+		bank_balance = round(value(bank[gw]), digits=1)
+
+		transfer_info_by_gw[gw] = (ft_available, t_made, bank_balance)
+
+        println("Bank after GW$gw: £$(bank_balance)m")
     end
-    
-    return squads_by_gw, transfers_by_gw
+
+    return squads_by_gw, transfers_by_gw, transfer_info_by_gw
 end
 
 # ╔═╡ 757049ba-7657-4cea-b5d9-1289809fd4c6
@@ -166,9 +176,11 @@ function optimise_from_current_team(df, current_team, initial_bank=0.0)
     @variable(model, squad[1:n, START_GW:END_GW], Bin)
     @variable(model, starter[1:n, START_GW:END_GW], Bin)
     @variable(model, captain[1:n, START_GW:END_GW], Bin)
-    @variable(model, transfer_in[1:n, START_GW:END_GW], Bin) 
+    @variable(model, transfer_in[1:n, START_GW:END_GW], Bin)
     @variable(model, transfer_out[1:n, START_GW:END_GW], Bin)
 	@variable(model, bank[START_GW:END_GW] >= 0)  	# Tracks bank balance to ensure feasible transfers
+	@variable(model, 1 <= free_transfers[START_GW:END_GW] <= MAX_FREE_TRANSFERS, Int)
+	@variable(model, 0 <= transfers_made[START_GW:END_GW] <= MAX_FREE_TRANSFERS, Int)
 
 	@objective(model, Max, sum(GAMEWEEK_WEIGHTS[gw - START_GW + 1] * df[i, "$(gw)_Pts"] * (starter[i, gw] + captain[i, gw] + BENCH_WEIGHT * (squad[i, gw] - starter[i, gw])) for i in 1:n, gw in START_GW:END_GW))
 
@@ -183,12 +195,25 @@ function optimise_from_current_team(df, current_team, initial_bank=0.0)
 		sum(df[i, "BV"] * transfer_in[i, gw] for i in 1:n))
     end
 
-	# Transfers
+	# Transfers with banking
+	@constraint(model, free_transfers[START_GW] == INITIAL_FREE_TRANSFERS)
+
     for gw in START_GW:END_GW
-        @constraint(model, sum(transfer_in[i, gw] for i in 1:n) <= 1)
-        @constraint(model, sum(transfer_out[i, gw] for i in 1:n) <= 1)
+		# Link transfers_made to actual transfers
+		@constraint(model, transfers_made[gw] == sum(transfer_in[i, gw] for i in 1:n))
+
+		# Can't exceed available free transfers
+		@constraint(model, transfers_made[gw] <= free_transfers[gw])
+
+		# Equal in/out to maintain squad size
         @constraint(model, sum(transfer_in[i, gw] for i in 1:n) == sum(transfer_out[i, gw] for i in 1:n))
     end
+
+	# Free transfer banking: ft[gw+1] = min(ft[gw] - made[gw] + 1, 5)
+	for gw in START_GW:(END_GW-1)
+		@constraint(model, free_transfers[gw+1] <= free_transfers[gw] - transfers_made[gw] + 1)
+		@constraint(model, free_transfers[gw+1] <= MAX_FREE_TRANSFERS)
+	end
 
 	# Squad init
 	for i in 1:n
@@ -235,12 +260,12 @@ function optimise_from_current_team(df, current_team, initial_bank=0.0)
 	
 	optimize!(model)
 
-    return extract_transfer_plan_with_bank(df, squad, starter, captain, transfer_in, transfer_out, bank)
+    return extract_transfer_plan_with_bank(df, squad, starter, captain, transfer_in, transfer_out, bank, free_transfers, transfers_made)
 end
 
 # ╔═╡ 09efab45-6fbd-49e0-ada9-a7cdbea18504
 # ╠═╡ show_logs = false
-squads_by_gw, transfers_by_gw = optimise_from_current_team(df, current_team); 
+squads_by_gw, transfers_by_gw, transfer_info_by_gw = optimise_from_current_team(df, current_team); 
 
 # ╔═╡ 4505094b-14b2-44c8-8fbf-c88cf194bdde
 function display_squad(results_df, captain_name, bench_names)
@@ -260,16 +285,16 @@ function display_squad(results_df, captain_name, bench_names)
 end
 
 # ╔═╡ 09cc7b0f-2955-4c04-ba3a-360072d34146
-function display_transfer_plan(squads_by_gw, transfers_by_gw)
+function display_transfer_plan(squads_by_gw, transfers_by_gw, transfer_info_by_gw)
     for gw in sort(collect(keys(squads_by_gw)))
         println("\n" * "="^60)
         println("GAMEWEEK $gw")
         println("="^60)
-        
+
         # Transfers
         if haskey(transfers_by_gw, gw)
             transfers_in, transfers_out = transfers_by_gw[gw]
-            
+
             if !isempty(transfers_in) || !isempty(transfers_out)
                 println("\nTRANSFERS:")
                 if !isempty(transfers_out)
@@ -285,19 +310,28 @@ function display_transfer_plan(squads_by_gw, transfers_by_gw)
             end
         end
 
+		# Transfer info
+		if haskey(transfer_info_by_gw, gw)
+			ft_available, t_made, bank_balance = transfer_info_by_gw[gw]
+			println("Free transfers available: $ft_available")
+			println("Transfers made: $t_made")
+			println("Bank: £$(bank_balance)m")
+			println()
+		end
+
 		# Squad
         squad_df, captain_name, bench_names = squads_by_gw[gw]
         display_squad(squad_df, captain_name, bench_names)
-        
+
         # Expected Points
-        total_points = sum(squad_df.xPts[1:11]) + 
+        total_points = sum(squad_df.xPts[1:11]) +
                       (captain_name != "" ? squad_df[squad_df.Name .== captain_name, :xPts][1] : 0)
         println("\n Expected Points: $(round(total_points, digits=1))")
     end
 end
 
 # ╔═╡ 2061c3cd-b345-46aa-9fd3-ae8bf12e8e1e
-display_transfer_plan(squads_by_gw, transfers_by_gw)
+display_transfer_plan(squads_by_gw, transfers_by_gw, transfer_info_by_gw)
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
