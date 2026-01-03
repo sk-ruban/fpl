@@ -24,10 +24,10 @@ main {
 
 # ╔═╡ 20ca06b0-bbe8-4a89-b0cc-99487ff2fbe0
 begin
-	const START_GW = 19
+	const START_GW = 20
 	const NUM_GAMEWEEKS = 5
 	
-	const BUDGET = 100.6     # REMEMBER TO UPDATE USING SQUAD VALUE
+	const BUDGET = 100.8     # REMEMBER TO UPDATE USING SQUAD VALUE
 	const GAMEWEEK_WEIGHTS = [1.0, 0.9, 0.8, 0.7, 0.6]
 	const BENCH_WEIGHT = 0.1
 	
@@ -61,14 +61,14 @@ current_team = [
     "Kudus",        # MID
     "Saka",         # MID
 	"Anderson",     # MID 
-    "B.Fernandes",  # MID
+    "Cunha",        # MID
     "Woltemade",    # FWD
 	"Haaland",      # FWD
-    "Welbeck",        # FWD
+    "Welbeck",      # FWD
     "Dúbravka",     # GK (bench)
     "Andersen",     # DEF (bench)
-	"Mukiele",      # DEF (bench)
-    "Gonzalez"      # MID (bench)
+	"Dorgu",        # DEF (bench)
+    "Cherki"        # MID (bench)
 ]
 
 # ╔═╡ 50a83055-a467-48b0-80dc-77c51d248248
