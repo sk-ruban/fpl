@@ -24,10 +24,10 @@ main {
 
 # ╔═╡ 20ca06b0-bbe8-4a89-b0cc-99487ff2fbe0
 begin
-	const START_GW = 20
+	const START_GW = 22
 	const NUM_GAMEWEEKS = 5
 	
-	const BUDGET = 100.8     # REMEMBER TO UPDATE USING SQUAD VALUE
+	const BUDGET = 100.3     # REMEMBER TO UPDATE USING SQUAD VALUE
 	const GAMEWEEK_WEIGHTS = [1.0, 0.9, 0.8, 0.7, 0.6]
 	const BENCH_WEIGHT = 0.1
 	
@@ -58,11 +58,11 @@ current_team = [
     "Thiaw",        # DEF
     "Lacroix", 		# DEF  
     "Virgil",       # DEF
-    "Kudus",        # MID
+    "Rice",         # MID
     "Saka",         # MID
 	"Anderson",     # MID 
     "Cunha",        # MID
-    "Woltemade",    # FWD
+    "Mané",         # FWD
 	"Haaland",      # FWD
     "Welbeck",      # FWD
     "Dúbravka",     # GK (bench)
